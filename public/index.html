@@ -2093,7 +2093,13 @@ async function startSession() {
 
           case 'user.transcription':
             // LITE 모드: 서버 STT(Deepgram)가 인식한 텍스트 → 우리 GPT 파이프라인으로 처리
-            if (evt.text && evt.text.trim()) {
+            // ★ is_final 체크: interim(중간 결과) 무시, final(최종 결과)만 처리
+            if (evt.text && evt.text.trim() && evt.is_final !== false) {
+              // 이미 처리 중이면 중복 방지
+              if (isProcessing) {
+                console.log('[LITE] STT 중복 무시 (이미 처리 중):', evt.text.trim());
+                break;
+              }
               console.log('[LITE] STT 인식:', evt.text.trim());
               processUserInput(evt.text.trim());
             }
