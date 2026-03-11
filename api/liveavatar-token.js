@@ -40,7 +40,7 @@ export default async function handler(req, res) {
         "X-API-KEY": LIVEAVATAR_API_KEY,
       },
       body: JSON.stringify({
-        mode: "FULL",
+        mode: "LITE",
         avatar_id: avatarId,
         is_sandbox: false,
         video_settings: {

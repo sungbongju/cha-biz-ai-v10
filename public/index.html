@@ -1864,8 +1864,9 @@ function onSpeakingDone(source) {
   if (sessionInfo) {
     setVoiceState('listening');
     taskInput.placeholder = '음성 인식 중... 말씀하세요';
-    // ★ FULL 모드: 발화 완료 후 다시 리스닝 시작 명령
+    // ★ LITE 모드: 발화 완료 후 리스닝 재시작 + 마이크 복원
     sendCommand('avatar.start_listening');
+    // 에코 방지 Layer 3: 1초 후 마이크 언뮤트 (speak_ended에서도 하지만 여기서도 보장)
   } else {
     setVoiceState('idle');
   }
@@ -1936,9 +1937,24 @@ function detectSectionFromText(text) {
   return bestMatch;
 }
 
-/* ── 대화 처리 파이프라인 (LiveAvatar FULL 모드) ── */
+/* ── 대화 처리 파이프라인 (LiveAvatar LITE 모드) ── */
 var _replyBuffer = '';
 var _replyBubble = null;
+var _chatHistory = []; // GPT 대화 히스토리
+
+async function askGPT(message) {
+  var res = await fetch('/api/openai-chat', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      type: 'chat',
+      message: message,
+      history: _chatHistory.slice(-10)
+    })
+  });
+  if (!res.ok) throw new Error('GPT API 오류: ' + res.status);
+  return res.json();
+}
 
 function processUserInput(text) {
   if (!text || !sessionInfo) return;
@@ -1950,8 +1966,45 @@ function processUserInput(text) {
   addChatBubble(text, 'user');
   setVoiceState('thinking');
 
-  // LiveAvatar: avatar.speak_response → 내부 LLM이 응답 생성 + TTS
-  sendCommand('avatar.speak_response', { text: text });
+  // 마이크 뮤트 (GPT 응답 대기 + 발화 중 에코 방지)
+  muteInput('processUserInput');
+
+  // 대화 히스토리에 사용자 메시지 추가
+  _chatHistory.push({ role: 'user', content: text });
+
+  // LITE 모드: 우리 GPT API 호출 → TTS 텍스트 → avatar.speak_text
+  askGPT(text).then(function(data) {
+    var displayReply = data.reply || '죄송합니다. 답변을 생성하지 못했어요.';
+    var ttsReply = data.ttsReply || displayReply;
+    var action = data.action || 'none';
+    var tabId = data.tabId || null;
+
+    // 대화 히스토리에 AI 응답 추가
+    _chatHistory.push({ role: 'assistant', content: displayReply });
+
+    // 채팅 버블 표시
+    _replyBuffer = displayReply;
+    _replyBubble = addChatBubble(displayReply, 'ai');
+
+    // 섹션 스크롤
+    if (action === 'navigate' && tabId) {
+      navigateToSection(tabId);
+    }
+
+    // 아바타 발화 (LITE 모드: avatar.speak_text로 TTS 텍스트 전송)
+    isSpeaking = true;
+    setVoiceState('speaking');
+    sendCommand('avatar.speak_text', { text: ttsReply });
+
+    console.log('[LITE] GPT 응답 → avatar.speak_text 전송 완료');
+  }).catch(function(err) {
+    console.error('[LITE] GPT 오류:', err);
+    isProcessing = false;
+    setVoiceState('listening');
+    addChatBubble('오류가 발생했어요. 다시 말씀해 주세요.', 'ai');
+    unmuteInput('gpt_error');
+    sendCommand('avatar.start_listening');
+  });
 }
 
 function sendMessage() {
@@ -1961,7 +2014,7 @@ function sendMessage() {
   processUserInput(text);
 }
 
-/* ── 세션 시작 / 종료 (LiveAvatar FULL 모드) ── */
+/* ── 세션 시작 / 종료 (LiveAvatar LITE 모드) ── */
 async function startSession() {
   var loginModal = document.getElementById('login-modal');
   if (loginModal && loginModal.classList.contains('active')) {
@@ -2039,11 +2092,10 @@ async function startSession() {
             break;
 
           case 'user.transcription':
-            // 사용자 발화 텍스트 → 채팅 버블 (FULL 모드: 서버가 자동으로 LLM 응답)
+            // LITE 모드: 서버 STT(Deepgram)가 인식한 텍스트 → 우리 GPT 파이프라인으로 처리
             if (evt.text && evt.text.trim()) {
-              addChatBubble(evt.text.trim(), 'user');
-              isProcessing = true;
-              setVoiceState('thinking');
+              console.log('[LITE] STT 인식:', evt.text.trim());
+              processUserInput(evt.text.trim());
             }
             break;
 
@@ -2073,19 +2125,11 @@ async function startSession() {
             break;
 
           case 'avatar.transcription':
-            // ★ AI 응답 텍스트 — 에코 없이 깔끔하게!
+            // LITE 모드: avatar.speak_text로 보낸 텍스트가 에코로 돌아옴 → 무시
+            // (채팅 버블은 processUserInput에서 이미 추가함)
             if (evt.text) {
-              var displayText = cleanForDisplay(evt.text).trim();
-              _replyBuffer = evt.text;
               lastAvatarText = evt.text; // 에코 필터링용
-              if (displayText) {
-                if (!_replyBubble) {
-                  _replyBubble = addChatBubble(displayText, 'ai');
-                } else {
-                  _replyBubble.textContent = displayText;
-                  chatHistoryEl.scrollTop = chatHistoryEl.scrollHeight;
-                }
-              }
+              console.log('[LITE] avatar.transcription (무시):', evt.text.substring(0, 50));
             }
             break;
 
@@ -2109,7 +2153,7 @@ async function startSession() {
 
     await room.connect(sess.livekit_url, sess.livekit_client_token);
 
-    // 마이크 활성화 (LiveAvatar FULL 모드: 사용자 음성을 LiveKit으로 전송 → 서버 STT)
+    // 마이크 활성화 (LiveAvatar LITE 모드: 사용자 음성을 LiveKit으로 전송 → 서버 STT(Deepgram) → user.transcription → 우리 GPT)
     await room.localParticipant.setMicrophoneEnabled(true);
     console.log('[LA] 마이크 활성화 완료');
 
@@ -2146,22 +2190,15 @@ async function startSession() {
       if (sessionInfo) keepAliveAPI(sessionInfo.session_id);
     }, 240000);
 
-    // 인사 메시지 (Context의 opening_text가 있으면 자동 발화됨)
-    // opening_text가 없을 경우 직접 발화
-    if (!AVATAR_CONFIG.contextId) {
-      var greetingDisplay = '안녕하세요! 차의과학대학교 경영학전공 상담을 도와드릴게요. 궁금하신 점을 편하게 말씀해 주세요.';
-      var greetingTTS = '안녕하세요! 차 의과학 대학교, 경영학 전공 상담을 도와드릴게요. 궁금하신 점을 편하게 말씀해 주세요.';
-      addChatBubble(greetingDisplay, 'ai');
-      isSpeaking = true;
-      setVoiceState('speaking');
-      sendCommand('avatar.speak_text', { text: greetingTTS });
-      // ★ start_listening은 인사말 끝난 후 avatar.speak_ended → onSpeakingDone에서 전송
-    } else {
-      // contextId가 있으면 opening_text가 자동 발화 → 완료 후 자동 리스닝
-      sendCommand('avatar.start_listening');
-      setVoiceState('listening');
-      taskInput.placeholder = '음성 인식 중... 말씀하세요';
-    }
+    // LITE 모드: 항상 직접 인사 메시지 발화 (서버 LLM 없으므로 opening_text 자동 발화 안됨)
+    var greetingDisplay = '안녕하세요! 차의과학대학교 경영학전공 상담을 도와드릴게요. 궁금하신 점을 편하게 말씀해 주세요.';
+    var greetingTTS = '안녕하세요! 차 의과학 대학교, 경영학 전공 상담을 도와드릴게요. 궁금하신 점을 편하게 말씀해 주세요.';
+    addChatBubble(greetingDisplay, 'ai');
+    isSpeaking = true;
+    setVoiceState('speaking');
+    muteInput('greeting');
+    sendCommand('avatar.speak_text', { text: greetingTTS });
+    // ★ start_listening은 인사말 끝난 후 avatar.speak_ended → onSpeakingDone에서 전송
 
   } catch (err) {
     console.error('[LA]', err);
