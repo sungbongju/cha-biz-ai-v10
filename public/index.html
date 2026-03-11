@@ -1864,6 +1864,8 @@ function onSpeakingDone(source) {
   if (sessionInfo) {
     setVoiceState('listening');
     taskInput.placeholder = '음성 인식 중... 말씀하세요';
+    // ★ FULL 모드: 발화 완료 후 다시 리스닝 시작 명령
+    sendCommand('avatar.start_listening');
   } else {
     setVoiceState('idle');
   }
