@@ -1999,12 +1999,20 @@ async function startSession() {
         avatarAudioTrack = track;
         // Output 소켓: 아바타 음성을 GainNode 통해 스피커로 라우팅
         outputAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        // AudioContext autoplay 정책 해제
+        if (outputAudioCtx.state === 'suspended') {
+          outputAudioCtx.resume().then(function() {
+            console.log('[AEC] Output AudioContext resumed');
+          });
+        }
         var stream = new MediaStream([track.mediaStreamTrack]);
         outputSource = outputAudioCtx.createMediaStreamSource(stream);
         outputGainNode = outputAudioCtx.createGain();
         outputGainNode.gain.value = 1.0;
         outputSource.connect(outputGainNode);
         outputGainNode.connect(outputAudioCtx.destination);
+        // 추가: video 엘리먼트에도 오디오 연결 (백업)
+        track.attach(mediaEl);
         console.log('[AEC] Output 소켓 설정 완료 (아바타 음성 → GainNode → 스피커)');
       }
     });
@@ -2031,10 +2039,14 @@ async function startSession() {
             break;
 
           case 'user.transcription':
-            // 사용자 발화 텍스트 → 채팅 버블
+            // 사용자 발화 텍스트 → 채팅 버블 + LLM 응답 요청
             if (evt.text && evt.text.trim()) {
               addChatBubble(evt.text.trim(), 'user');
               isProcessing = true;
+              setVoiceState('thinking');
+              // ★ FULL 모드: 서버 LLM에 응답 생성 요청
+              sendCommand('avatar.speak_response', { text: evt.text.trim() });
+              console.log('[LA] LLM 응답 요청:', evt.text.trim());
             }
             break;
 
