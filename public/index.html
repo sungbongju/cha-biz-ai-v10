@@ -2039,14 +2039,11 @@ async function startSession() {
             break;
 
           case 'user.transcription':
-            // 사용자 발화 텍스트 → 채팅 버블 + LLM 응답 요청
+            // 사용자 발화 텍스트 → 채팅 버블 (FULL 모드: 서버가 자동으로 LLM 응답)
             if (evt.text && evt.text.trim()) {
               addChatBubble(evt.text.trim(), 'user');
               isProcessing = true;
               setVoiceState('thinking');
-              // ★ FULL 모드: 서버 LLM에 응답 생성 요청
-              sendCommand('avatar.speak_response', { text: evt.text.trim() });
-              console.log('[LA] LLM 응답 요청:', evt.text.trim());
             }
             break;
 
