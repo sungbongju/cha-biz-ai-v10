@@ -2146,12 +2146,13 @@ async function startSession() {
       isSpeaking = true;
       setVoiceState('speaking');
       sendCommand('avatar.speak_text', { text: greetingTTS });
+      // ★ start_listening은 인사말 끝난 후 avatar.speak_ended → onSpeakingDone에서 전송
+    } else {
+      // contextId가 있으면 opening_text가 자동 발화 → 완료 후 자동 리스닝
+      sendCommand('avatar.start_listening');
+      setVoiceState('listening');
+      taskInput.placeholder = '음성 인식 중... 말씀하세요';
     }
-
-    // 리스닝 시작
-    sendCommand('avatar.start_listening');
-    setVoiceState('listening');
-    taskInput.placeholder = '음성 인식 중... 말씀하세요';
 
   } catch (err) {
     console.error('[LA]', err);
