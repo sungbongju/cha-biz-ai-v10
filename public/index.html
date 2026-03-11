@@ -2037,7 +2037,15 @@ async function startSession() {
 
     // 2. LiveKit Room 연결
     var lk = window.LivekitClient;
-    room = new lk.Room({ adaptiveStream: true, dynacast: true });
+    room = new lk.Room({
+      adaptiveStream: true,
+      dynacast: true,
+      audioCaptureDefaults: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true
+      }
+    });
 
     // 비디오/오디오 트랙 수신 — 소켓 분리 AEC
     room.on(lk.RoomEvent.TrackSubscribed, function(track, pub, participant) {
